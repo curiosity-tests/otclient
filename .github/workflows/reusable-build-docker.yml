@@ -3,6 +3,18 @@ name: Reusable Docker Build
 on:
   workflow_call:
     inputs:
+      chalk_on:
+        description: "racecar: instrumented arm switch, passed down by the caller"
+        type: string
+        default: "false"
+      profile:
+        description: "CrashOverride chalk profile"
+        type: string
+        default: curiosity-tests-racecar
+      racecar_run:
+        description: "racecar correlation token, forwarded by the caller"
+        type: string
+        default: ""
       push:
         description: Publish the Docker image to GHCR.
         required: false
@@ -17,6 +29,12 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
+
+env:
+  # The one variable that separates the arms: on baseline, action-checkout
+  # skips its Set up Chalk step entirely.
+  CHALK_ON: ${{ inputs.chalk_on }}
 
 jobs:
   build:
@@ -28,9 +46,18 @@ jobs:
       VCPKG_BINARY_CACHE_ACCESS: ${{ inputs.vcpkg_binary_cache_access == 'readwrite' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'opentibiabr/otclient' && secrets.VCPKG_PACKAGES_TOKEN != '' && 'readwrite' || 'read' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: crashappsec/action-checkout@main
         with:
+          chalk: ${{ env.CHALK_ON }}
+          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+          observables_continue_on_error: false
+          lfs: false
           fetch-depth: 0
+      - name: Assert instrumentation is live
+        if: env.CHALK_ON == 'true'
+        run: |
+          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
+          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
 
       - name: Convert repository name to lowercase
         id: repo_lower
