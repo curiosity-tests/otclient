@@ -92,7 +92,7 @@ permissions:
 env:
   # The one variable that separates the arms: on baseline, action-checkout
   # skips its Set up Chalk step entirely.
-  CHALK_ON: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+  CHALK_ON: ${{ inputs.leg == 'instrumented' }}
 
 run-name: "CI ${{ inputs.leg || 'push' }} ${{ inputs.racecar_run }}"
 
@@ -104,11 +104,11 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      compile: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && 'true' || steps.filter.outputs.compile }}
-      macos: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && 'true' || steps.filter.outputs.macos }}
-      android: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && 'true' || steps.filter.outputs.android }}
-      docker: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && 'true' || steps.filter.outputs.docker }}
-      browser: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group') && 'true' || steps.filter.outputs.browser }}
+      compile: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.compile }}
+      macos: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.macos }}
+      android: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.android }}
+      docker: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.docker }}
+      browser: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.browser }}
     steps:
       - name: Checkout repository
         uses: crashappsec/action-checkout@main
@@ -126,7 +126,7 @@ jobs:
 
       - name: Detect changed paths
         id: filter
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'merge_group'
+        if: ${{ 'push' != 'workflow_dispatch' && 'push' != 'merge_group' }}
         uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
         with:
           filters: |
@@ -203,7 +203,7 @@ jobs:
 
   checks:
     name: Fast Checks
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: ${{ 'push' != 'pull_request' || github.event.pull_request.draft == false }}
     permissions:
       contents: read
       checks: write
@@ -211,20 +211,20 @@ jobs:
       id-token: write
     uses: ./.github/workflows/reusable-checks.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
     secrets: inherit
 
   tests-lua:
     name: Lua Syntax
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: ${{ 'push' != 'pull_request' || github.event.pull_request.draft == false }}
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/reusable-tests-lua.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
     secrets: inherit
@@ -232,14 +232,14 @@ jobs:
   build-linux:
     name: Build - Linux
     needs: [changes, checks, tests-lua]
-    if: needs.changes.outputs.compile == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: needs.changes.outputs.compile == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && ('push' != 'pull_request' || github.event.pull_request.draft == false)
     permissions:
       contents: read
       packages: read
       id-token: write
     uses: ./.github/workflows/reusable-build-linux.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
     secrets: inherit
@@ -247,14 +247,14 @@ jobs:
   build-android-apk:
     name: Build - Android APK
     needs: [changes, checks, tests-lua]
-    if: needs.changes.outputs.android == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: needs.changes.outputs.android == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && ('push' != 'pull_request' || github.event.pull_request.draft == false)
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     uses: ./.github/workflows/reusable-build-android-apk.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
     secrets: inherit
@@ -262,30 +262,30 @@ jobs:
   build-docker:
     name: Build - Docker
     needs: [changes, checks, tests-lua]
-    if: needs.changes.outputs.docker == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: needs.changes.outputs.docker == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && ('push' != 'pull_request' || github.event.pull_request.draft == false)
     permissions:
       contents: read
       packages: write
       id-token: write
     uses: ./.github/workflows/reusable-build-docker.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
-      push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      vcpkg_binary_cache_access: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'readwrite' || 'read' }}
+      push: ${{ 'push' == 'push' && github.ref == 'refs/heads/main' }}
+      vcpkg_binary_cache_access: ${{ 'push' == 'push' && github.ref == 'refs/heads/main' && 'readwrite' || 'read' }}
     secrets: inherit
 
   build-browser:
     name: Build - Browser
     needs: [changes, checks, tests-lua]
-    if: needs.changes.outputs.browser == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    if: needs.changes.outputs.browser == 'true' && needs.checks.result == 'success' && needs.tests-lua.result == 'success' && ('push' != 'pull_request' || github.event.pull_request.draft == false)
     permissions:
       contents: read
       id-token: write
     uses: ./.github/workflows/reusable-build-browser.yml
     with:
-      chalk_on: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+      chalk_on: ${{ inputs.leg == 'instrumented' }}
       profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
       racecar_run: ${{ inputs.racecar_run }}
     secrets: inherit
