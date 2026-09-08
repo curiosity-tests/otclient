@@ -111,7 +111,7 @@ jobs:
       browser: ${{ ('push' == 'workflow_dispatch' || 'push' == 'merge_group') && 'true' || steps.filter.outputs.browser }}
     steps:
       - name: Checkout repository
-        uses: crashappsec/action-checkout@main
+        uses: crashappsec/action-checkout@e9ff46a65f6403d9d88b87d248c3dfa41550ec75
         with:
           chalk: ${{ env.CHALK_ON }}
           profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
