@@ -46,7 +46,7 @@ jobs:
       VCPKG_BINARY_CACHE_ACCESS: ${{ inputs.vcpkg_binary_cache_access == 'readwrite' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'opentibiabr/otclient' && secrets.VCPKG_PACKAGES_TOKEN != '' && 'readwrite' || 'read' }}
     steps:
       - name: Checkout
-        uses: crashappsec/action-checkout@main
+        uses: crashappsec/action-checkout@e9ff46a65f6403d9d88b87d248c3dfa41550ec75
         with:
           chalk: ${{ env.CHALK_ON }}
           profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
