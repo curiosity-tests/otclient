@@ -42,130 +42,201 @@ jobs:
       VCPKG_NUGET_REPOSITORY: https://github.com/${{ github.repository }}.git
       VCPKG_NUGET_API_KEY: ${{ secrets.VCPKG_PACKAGES_TOKEN != '' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') && secrets.VCPKG_PACKAGES_TOKEN || github.token }}
     steps:
-      - name: Checkout repository
-        uses: crashappsec/action-checkout@e9ff46a65f6403d9d88b87d248c3dfa41550ec75
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+    - name: Checkout repository
+      uses: crashappsec/action-checkout@e9ff46a65f6403d9d88b87d248c3dfa41550ec75
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@v9
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v9
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+    - name: Get vcpkg baseline
+      shell: bash
+      run: |
+        set -euo pipefail
+        vcpkg_commit_id="$(grep '.builtin-baseline' vcpkg.json | awk -F: '{print $2}' | tr -d '," ')"
+        echo "VCPKG_GIT_COMMIT_ID=${vcpkg_commit_id}" >> "${GITHUB_ENV}"
 
-      - name: Get vcpkg baseline
-        shell: bash
-        run: |
-          set -euo pipefail
-          vcpkg_commit_id="$(grep '.builtin-baseline' vcpkg.json | awk -F: '{print $2}' | tr -d '," ')"
-          echo "VCPKG_GIT_COMMIT_ID=${vcpkg_commit_id}" >> "${GITHUB_ENV}"
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          autoconf \
+          autoconf-archive \
+          automake \
+          ccache \
+          gcc-14 \
+          g++-14 \
+          libgl1-mesa-dev \
+          libglu1-mesa-dev \
+          libltdl-dev \
+          libtool \
+          libtool-bin \
+          libx11-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libxinerama-dev \
+          libxrandr-dev \
+          linux-libc-dev \
+          make \
+          mono-complete \
+          ninja-build \
+          perl \
+          pkg-config
+        sudo ln -sf /usr/bin/ninja /usr/bin/ninja-build
+        ninja --version
 
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            autoconf \
-            autoconf-archive \
-            automake \
-            ccache \
-            gcc-14 \
-            g++-14 \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev \
-            libltdl-dev \
-            libtool \
-            libtool-bin \
-            libx11-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            linux-libc-dev \
-            make \
-            mono-complete \
-            ninja-build \
-            perl \
-            pkg-config
-          sudo ln -sf /usr/bin/ninja /usr/bin/ninja-build
-          ninja --version
+    - name: CCache
+      uses: hendrikmuhs/ccache-action@v1.2.23
+      with:
+        max-size: "1G"
+        key: ccache-linux-${{ matrix.buildtype }}
+        restore-keys: |
+          ccache-linux
 
-      - name: CCache
-        uses: hendrikmuhs/ccache-action@v1.2.23
-        with:
-          max-size: "1G"
-          key: ccache-linux-${{ matrix.buildtype }}
-          restore-keys: |
-            ccache-linux
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgGitURL: "https://github.com/microsoft/vcpkg.git"
+        vcpkgGitCommitId: ${{ env.VCPKG_GIT_COMMIT_ID }}
 
-      - name: Setup vcpkg
-        uses: lukka/run-vcpkg@v11
-        with:
-          vcpkgGitURL: "https://github.com/microsoft/vcpkg.git"
-          vcpkgGitCommitId: ${{ env.VCPKG_GIT_COMMIT_ID }}
+    - name: Setup NuGet for vcpkg
+      env:
+        NUGET_AUTH_TOKEN: ${{ env.VCPKG_NUGET_API_KEY }}
+      run: |
+        set -euo pipefail
+        unset VCPKG_FORCE_SYSTEM_BINARIES
+        nuget_path="$(vcpkg fetch nuget 2>&1 | grep -E '^/' | tail -n 1)"
+        if [[ -z "${nuget_path}" || ! -f "${nuget_path}" ]]; then
+          echo "Failed to locate NuGet fetched by vcpkg."
+          vcpkg fetch nuget 2>&1 || true
+          exit 1
+        fi
+        mono "${nuget_path}" sources remove -name "GitHubPackages" >/dev/null 2>&1 || true
+        mono "${nuget_path}" sources add \
+          -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+          -storepasswordincleartext \
+          -name "GitHubPackages" \
+          -username "${{ github.repository_owner }}" \
+          -password "${NUGET_AUTH_TOKEN}"
+        mono "${nuget_path}" setapikey "${NUGET_AUTH_TOKEN}" \
+          -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
 
-      - name: Setup NuGet for vcpkg
-        env:
-          NUGET_AUTH_TOKEN: ${{ env.VCPKG_NUGET_API_KEY }}
-        run: |
-          set -euo pipefail
-          unset VCPKG_FORCE_SYSTEM_BINARIES
-          nuget_path="$(vcpkg fetch nuget 2>&1 | grep -E '^/' | tail -n 1)"
-          if [[ -z "${nuget_path}" || ! -f "${nuget_path}" ]]; then
-            echo "Failed to locate NuGet fetched by vcpkg."
-            vcpkg fetch nuget 2>&1 || true
-            exit 1
+    - name: Run CMake
+      uses: lukka/run-cmake@v10
+      with:
+        configurePreset: ${{ matrix.buildtype }}
+        buildPreset: ${{ matrix.buildtype }}
+        configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF']"
+
+    - name: Run CTest
+      if: matrix.buildtype == 'linux-debug'
+      run: ctest --test-dir build/${{ matrix.buildtype }} --output-on-failure --parallel 2
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: linux-${{ matrix.buildtype }}
+        path: build/${{ matrix.buildtype }}/bin/
+
+    - name: Verify vcpkg binary cache push
+      if: success() && env.VCPKG_BINARY_CACHE_ACCESS == 'readwrite'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mapfile -d '' logs < <(find . -name "vcpkg-manifest-install.log" -print0)
+        if [[ ${#logs[@]} -eq 0 ]]; then
+          echo "No vcpkg manifest logs found." >&2
+          exit 1
+        fi
+        if grep -Eq "to [1-9][0-9]* binary cache\(s\)" -- "${logs[@]}"; then
+          exit 0
+        fi
+        if grep -q "to 0 binary cache(s)" -- "${logs[@]}"; then
+          echo "Binary cache push reported 0 caches and no successful push was found." >&2
+          exit 1
+        fi
+        echo "No binary cache push summary found; assuming no package was built for upload."
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
           fi
-          mono "${nuget_path}" sources remove -name "GitHubPackages" >/dev/null 2>&1 || true
-          mono "${nuget_path}" sources add \
-            -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
-            -storepasswordincleartext \
-            -name "GitHubPackages" \
-            -username "${{ github.repository_owner }}" \
-            -password "${NUGET_AUTH_TOKEN}"
-          mono "${nuget_path}" setapikey "${NUGET_AUTH_TOKEN}" \
-            -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+        done
 
-      - name: Run CMake
-        uses: lukka/run-cmake@v10
-        with:
-          configurePreset: ${{ matrix.buildtype }}
-          buildPreset: ${{ matrix.buildtype }}
-          configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF']"
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
 
-      - name: Run CTest
-        if: matrix.buildtype == 'linux-debug'
-        run: ctest --test-dir build/${{ matrix.buildtype }} --output-on-failure --parallel 2
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-${{ matrix.buildtype }}
-          path: build/${{ matrix.buildtype }}/bin/
-
-      - name: Verify vcpkg binary cache push
-        if: success() && env.VCPKG_BINARY_CACHE_ACCESS == 'readwrite'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -d '' logs < <(find . -name "vcpkg-manifest-install.log" -print0)
-          if [[ ${#logs[@]} -eq 0 ]]; then
-            echo "No vcpkg manifest logs found." >&2
-            exit 1
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
           fi
-          if grep -Eq "to [1-9][0-9]* binary cache\(s\)" -- "${logs[@]}"; then
-            exit 0
-          fi
-          if grep -q "to 0 binary cache(s)" -- "${logs[@]}"; then
-            echo "Binary cache push reported 0 caches and no successful push was found." >&2
-            exit 1
-          fi
-          echo "No binary cache push summary found; assuming no package was built for upload."
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
